@@ -1,0 +1,26 @@
+# Build & Compiler Outputs
+/build/
+*.o
+*.obj
+*.d
+*.elf
+*.nacp
+*.nro
+*.map
+*.lst
+*.log
+*.tmp
+
+# Original Game Files, Binaries & Reference Ports
+/Asphalt v4.0.0l/
+/asphalt8-vita-v0.3/
+*.apk
+*.so
+*.obb
+*.zip
+
+# IDE / OS Artifacts
+.vscode/
+.idea/
+Thumbs.db
+[Dd]esktop.ini
