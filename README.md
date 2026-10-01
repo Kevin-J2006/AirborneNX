@@ -2,7 +2,7 @@
 
 Port nativo de **Asphalt 8: Airborne (Android, v4.0.0l)** para **Nintendo Switch**, por **ItsDroidy06**.
 
-Versión del port: **1.0.0**
+Versión del port: **1.0.1**
 
 AirborneNX no incluye el juego. Carga las bibliotecas originales `arm64-v8a` del APK y les da en la consola
 el entorno Android que esperan. Necesitas tu propia copia del juego (APK v4.0.0l y sus datos).
@@ -135,7 +135,7 @@ Si el port se cierra solo, abre `switch/AirborneNX/airbornenx.log`: la última l
 | Se cierra a los pocos segundos; el log dice `patch preimage mismatch` | El juego no es la versión `4.0.0l` de 64 bits. |
 | Se queda en la pantalla de carga | Falta `base.apk` o la carpeta `assets/`. |
 | No arranca o da error al abrirlo | Comprueba que lo lanzaste manteniendo R sobre un juego, no desde el Álbum. |
-| Faltan pistas tras el primer arranque | El juego borra de `files/dlcs/` los paquetes que no tiene registrados. **Guarda una copia de `files/dlcs/` aparte** antes de arrancar. |
+| Faltan pistas | Las pistas adicionales están en `files/dlcs/` (`dlc_v2_astc_track_*.jpk`). La versión 1.0.0 del port dejaba que el juego las borrara al arrancar; desde la 1.0.1 se conservan. Si las perdiste, vuelve a copiar esa carpeta. |
 
 ---
 

@@ -107,6 +107,17 @@ static void io_trace(const char *op, const char *path, const char *translated, b
     l_debug("[io] %s %s%s -> %s", op, ok ? "" : "FAILED ", path ? path : "(null)", translated ? translated : "(null)");
 }
 
+// A downloaded track pack. On every boot the engine's asset manager deletes
+// all the packs in dlcs/ and then mounts the ones listed in its metadata,
+// expecting to download them again. With no network that destroys the user's
+// only copy and leaves the tracks unavailable, so removals are refused: the
+// packs stay, and the engine mounts them as if they had just been fetched.
+static bool is_dlc_pack(const char *path) {
+    if (!path) return false;
+    size_t len = strlen(path);
+    return len > 4 && strcmp(path + len - 4, ".jpk") == 0 && strstr(path, "dlcs/") != NULL;
+}
+
 static void stat_to_bionic(const struct stat *in, bionic_stat *out) {
     memset(out, 0, sizeof(*out));
     out->st_dev = in->st_dev;
@@ -456,6 +467,10 @@ char *wrap_getcwd(char *buf, size_t size) {
 int wrap_remove(const char *pathname) {
     char buf[512];
     const char *translated = translate_path(pathname, buf, sizeof(buf));
+    if (is_dlc_pack(translated)) {
+        l_info("[io] kept %s (the game asked to delete it)", translated);
+        return 0;
+    }
     int ret = remove(translated);
     io_trace("remove", pathname, translated, ret == 0);
     return ret;
@@ -464,6 +479,10 @@ int wrap_remove(const char *pathname) {
 int wrap_unlink(const char *pathname) {
     char buf[512];
     const char *translated = translate_path(pathname, buf, sizeof(buf));
+    if (is_dlc_pack(translated)) {
+        l_info("[io] kept %s (the game asked to delete it)", translated);
+        return 0;
+    }
     int ret = unlink(translated);
     io_trace("unlink", pathname, translated, ret == 0);
     return ret;
