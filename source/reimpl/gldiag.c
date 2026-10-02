@@ -93,7 +93,7 @@ const GLubyte *wrap_glGetString(GLenum name) {
 }
 
 void diag_glCompileShader(GLuint shader) {
-    glCompileShader(shader);
+    sc_glCompileShader(shader);
     GLint ok = GL_FALSE;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
     if (ok) return;
@@ -118,7 +118,7 @@ void diag_glCompileShader(GLuint shader) {
 }
 
 void diag_glLinkProgram(GLuint program) {
-    glLinkProgram(program);
+    sc_glLinkProgram(program);
     GLint ok = GL_FALSE;
     glGetProgramiv(program, GL_LINK_STATUS, &ok);
     if (ok) return;
@@ -277,13 +277,13 @@ void gldiag_describe_texture(GLuint name, char *out, size_t size) {
 #if AIRBORNE_PROFILE
 void prof_glCompileShader(GLuint shader) {
     PROF_BEGIN();
-    glCompileShader(shader);
+    sc_glCompileShader(shader);
     PROF_END(PROF_COMPILE);
 }
 
 void prof_glLinkProgram(GLuint program) {
     PROF_BEGIN();
-    glLinkProgram(program);
+    sc_glLinkProgram(program);
     PROF_END(PROF_LINK);
 }
 

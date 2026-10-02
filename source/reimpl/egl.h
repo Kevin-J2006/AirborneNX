@@ -3,6 +3,7 @@
 
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
+#include <stdbool.h>
 
 /*
  * Asphalt 8 v4.x owns its EGL display, contexts and render thread; these
@@ -29,6 +30,10 @@ EGLContext wrap_eglGetCurrentContext(void);
 // Gives the calling thread the single real context with its own bindings.
 // Called with the GL lock held; see egl.c.
 void egl_ctx_acquire(void);
+
+// Whether the calling thread is the one that presents frames (it owns the
+// window surface). Called with the GL lock held.
+bool egl_on_drawing_thread(void);
 
 // Number of frames the game has presented so far.
 unsigned long egl_frame_count(void);

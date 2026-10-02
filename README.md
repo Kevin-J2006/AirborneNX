@@ -167,6 +167,9 @@ fps=30
 | Clave | Valores | Por defecto |
 | :--- | :--- | :--- |
 | `fps` | `30` o `60` | `60` |
+| `shadercache` | `0` (desactivada) o `1` | `1` |
+
+`shadercache` guarda los shaders ya compilados en `cache/shaders.bin` para no recompilarlos en cada arranque. Se puede borrar ese archivo sin problema: se vuelve a generar.
 
 ---
 

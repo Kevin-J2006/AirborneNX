@@ -7,6 +7,7 @@
 #include "../utils/logger.h"
 #include "../utils/prof.h"
 #include "astc.h"
+#include "shadercache.h"
 
 // glGetString with the renderer name the engine's quality profiles expect.
 const GLubyte *wrap_glGetString(GLenum name);
@@ -26,6 +27,15 @@ const GLubyte *wrap_glGetString(GLenum name);
 #define GL_COMPRESSED_TEX_IMPORT GLDIAG_FN(glCompressedTexImage2D)
 #else
 #define GL_COMPRESSED_TEX_IMPORT astc_glCompressedTexImage2D
+#endif
+
+// glCompileShader and glLinkProgram always end in the shader cache.
+#if AIRBORNE_DEBUG || AIRBORNE_PROFILE
+#define GL_COMPILE_IMPORT GLDIAG_FN(glCompileShader)
+#define GL_LINK_IMPORT    GLDIAG_FN(glLinkProgram)
+#else
+#define GL_COMPILE_IMPORT sc_glCompileShader
+#define GL_LINK_IMPORT    sc_glLinkProgram
 #endif
 
 // Profile build: time the calls that can stall a frame, pass the rest through.

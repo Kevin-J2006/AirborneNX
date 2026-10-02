@@ -212,6 +212,11 @@ void egl_ctx_acquire(void) {
     s_active = me;
 }
 
+// Caller holds the GL lock.
+bool egl_on_drawing_thread(void) {
+    return t_binding && s_egl_binding == t_binding;
+}
+
 EGLContext wrap_eglCreateContext(EGLDisplay dpy, EGLConfig config, EGLContext share_context,
                                  const EGLint *attrib_list) {
     for (const EGLint *a = attrib_list; a && *a != EGL_NONE; a += 2)

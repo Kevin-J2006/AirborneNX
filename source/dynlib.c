@@ -77,7 +77,14 @@ static inline FILE *check_stream(FILE *stream) {
 // ============================================================================
 // Stream I/O Wrappers
 // ============================================================================
-static int wrap_fclose(FILE *f) { return fclose(check_stream(f)); }
+static int wrap_fclose(FILE *f) {
+    char key[200];
+    f = check_stream(f);
+    io_stream_closing(f, key);
+    int ret = fclose(f);
+    io_stream_closed(key);
+    return ret;
+}
 static size_t wrap_fread(void *ptr, size_t sz, size_t n, FILE *f) { return fread(ptr, sz, n, check_stream(f)); }
 static size_t wrap_fwrite(const void *ptr, size_t sz, size_t n, FILE *f) { return fwrite(ptr, sz, n, check_stream(f)); }
 static int wrap_fseek(FILE *f, long off, int w) { return fseek(check_stream(f), off, w); }
@@ -121,6 +128,7 @@ static int wrap_fscanf(FILE *f, const char *fmt, ...) {
 static FILE *wrap_freopen(const char *p, const char *m, FILE *f) {
     char r[512];
     translate_path(p, r, sizeof(r));
+    io_invalidate_all();
     return freopen(r, m, check_stream(f));
 }
 static FILE *wrap_tmpfile(void) { return tmpfile(); }
@@ -131,7 +139,11 @@ static int wrap_mkstemp(char *t) { return mkstemp(t); }
 // File Descriptors / Path Translation Wrappers
 // ============================================================================
 static int wrap_rmdir(const char *p) {
-    char r[512]; translate_path(p, r, sizeof(r)); return rmdir(r);
+    char r[512]; translate_path(p, r, sizeof(r));
+    io_invalidate_all();
+    int ret = rmdir(r);
+    io_invalidate_all();
+    return ret;
 }
 static int wrap_chmod(const char *p, mode_t m) { (void)p; (void)m; return 0; }
 static mode_t wrap_umask(mode_t m) { (void)m; return 0; }
@@ -812,8 +824,8 @@ static so_default_dynlib s_default_dynlib[] = {
 
     // OpenGL ES 2.0
     { "glActiveTexture", (uintptr_t)GLTRACE_FN(glActiveTexture) },
-    { "glAttachShader", (uintptr_t)glAttachShader },
-    { "glBindAttribLocation", (uintptr_t)glBindAttribLocation },
+    { "glAttachShader", (uintptr_t)sc_glAttachShader },
+    { "glBindAttribLocation", (uintptr_t)sc_glBindAttribLocation },
     { "glBindBuffer", (uintptr_t)GLTRACE_FN(glBindBuffer) },
     { "glBindFramebuffer", (uintptr_t)GLTRACE_FN(glBindFramebuffer) },
     { "glBindRenderbuffer", (uintptr_t)glBindRenderbuffer },
@@ -831,13 +843,13 @@ static so_default_dynlib s_default_dynlib[] = {
     { "glClearDepthf", (uintptr_t)glClearDepthf },
     { "glClearStencil", (uintptr_t)glClearStencil },
     { "glColorMask", (uintptr_t)GLTRACE_FN(glColorMask) },
-    { "glCompileShader", (uintptr_t)GLDIAG_FN(glCompileShader) },
+    { "glCompileShader", (uintptr_t)GL_COMPILE_IMPORT },
     { "glCompressedTexImage2D", (uintptr_t)GL_COMPRESSED_TEX_IMPORT },
     { "glCompressedTexSubImage2D", (uintptr_t)glCompressedTexSubImage2D },
     { "glCopyTexImage2D", (uintptr_t)glCopyTexImage2D },
     { "glCopyTexSubImage2D", (uintptr_t)glCopyTexSubImage2D },
-    { "glCreateProgram", (uintptr_t)glCreateProgram },
-    { "glCreateShader", (uintptr_t)glCreateShader },
+    { "glCreateProgram", (uintptr_t)sc_glCreateProgram },
+    { "glCreateShader", (uintptr_t)sc_glCreateShader },
     { "glCullFace", (uintptr_t)GLTRACE_FN(glCullFace) },
     { "glDeleteBuffers", (uintptr_t)glDeleteBuffers },
     { "glDeleteFramebuffers", (uintptr_t)glDeleteFramebuffers },
@@ -848,7 +860,7 @@ static so_default_dynlib s_default_dynlib[] = {
     { "glDepthFunc", (uintptr_t)GLTRACE_FN(glDepthFunc) },
     { "glDepthMask", (uintptr_t)GLTRACE_FN(glDepthMask) },
     { "glDepthRangef", (uintptr_t)glDepthRangef },
-    { "glDetachShader", (uintptr_t)glDetachShader },
+    { "glDetachShader", (uintptr_t)sc_glDetachShader },
     { "glDisable", (uintptr_t)GLTRACE_FN(glDisable) },
     { "glDisableVertexAttribArray", (uintptr_t)GLTRACE_FN(glDisableVertexAttribArray) },
     { "glDrawArrays", (uintptr_t)GLTRACE_FN(glDrawArrays) },
@@ -878,8 +890,8 @@ static so_default_dynlib s_default_dynlib[] = {
     { "glGetProgramiv", (uintptr_t)glGetProgramiv },
     { "glGetProgramInfoLog", (uintptr_t)glGetProgramInfoLog },
     { "glGetRenderbufferParameteriv", (uintptr_t)glGetRenderbufferParameteriv },
-    { "glGetShaderiv", (uintptr_t)glGetShaderiv },
-    { "glGetShaderInfoLog", (uintptr_t)glGetShaderInfoLog },
+    { "glGetShaderiv", (uintptr_t)sc_glGetShaderiv },
+    { "glGetShaderInfoLog", (uintptr_t)sc_glGetShaderInfoLog },
     { "glGetShaderPrecisionFormat", (uintptr_t)glGetShaderPrecisionFormat },
     { "glGetShaderSource", (uintptr_t)glGetShaderSource },
     { "glGetString", (uintptr_t)wrap_glGetString },
@@ -900,7 +912,7 @@ static so_default_dynlib s_default_dynlib[] = {
     { "glIsShader", (uintptr_t)glIsShader },
     { "glIsTexture", (uintptr_t)glIsTexture },
     { "glLineWidth", (uintptr_t)glLineWidth },
-    { "glLinkProgram", (uintptr_t)GLDIAG_FN(glLinkProgram) },
+    { "glLinkProgram", (uintptr_t)GL_LINK_IMPORT },
     { "glPixelStorei", (uintptr_t)glPixelStorei },
     { "glPolygonOffset", (uintptr_t)glPolygonOffset },
     { "glReadPixels", (uintptr_t)glReadPixels },
@@ -909,7 +921,7 @@ static so_default_dynlib s_default_dynlib[] = {
     { "glSampleCoverage", (uintptr_t)glSampleCoverage },
     { "glScissor", (uintptr_t)GLTRACE_FN(glScissor) },
     { "glShaderBinary", (uintptr_t)glShaderBinary },
-    { "glShaderSource", (uintptr_t)glShaderSource },
+    { "glShaderSource", (uintptr_t)sc_glShaderSource },
     { "glStencilFunc", (uintptr_t)GLTRACE_FN(glStencilFunc) },
     { "glStencilFuncSeparate", (uintptr_t)glStencilFuncSeparate },
     { "glStencilMask", (uintptr_t)glStencilMask },

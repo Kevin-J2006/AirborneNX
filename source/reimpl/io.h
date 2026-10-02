@@ -15,6 +15,12 @@ ssize_t wrap_pread(int fd, void *buf, size_t count, off_t offset);
 ssize_t wrap_write(int fd, const void *buf, size_t count);
 off_t wrap_lseek(int fd, off_t offset, int whence);
 FILE *wrap_fdopen(int fd, const char *mode);
+// io.c remembers stat results and keeps closed files open for reuse; anything
+// that changes the card outside its wrappers has to say so.
+void io_invalidate_all(void);
+// Around fclose: `key` (200 bytes) carries what has to be forgotten.
+void io_stream_closing(FILE *f, char *key);
+void io_stream_closed(const char *key);
 const char *io_inflight(unsigned *seconds);
 void io_read_stats(unsigned long *calls, unsigned long *bytes, unsigned long *ipc);
 int wrap_stat(const char *path, void *buf);
