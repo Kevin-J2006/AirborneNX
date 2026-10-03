@@ -25,6 +25,12 @@
 static so_module so_libcxx;
 static so_module so_game;
 
+// Where libmyAndroid.so is loaded (0 before that), for code that reads the
+// game's own data.
+uintptr_t game_text_base(void) {
+    return so_game.base_addr;
+}
+
 // JNI Function Signatures
 typedef int (*jni_on_load_fn)(void *jvm, void *reserved);
 typedef void (*jni_void_fn)(void *env, void *clazz);

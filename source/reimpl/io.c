@@ -1,4 +1,5 @@
 #include "io.h"
+#include "shopmod.h"
 #include "../utils/init.h"
 #include "../utils/logger.h"
 #include "../utils/prof.h"
@@ -43,7 +44,7 @@ static const PathMapping s_path_map[] = {
     { "/sys",                                                SYSROOT_PATH "sys" },
 };
 
-const char *translate_path(const char *path, char *buffer, size_t buf_size) {
+static const char *map_android_path(const char *path, char *buffer, size_t buf_size) {
     if (!path || path[0] != '/') return path;
 
     for (size_t i = 0; i < sizeof(s_path_map) / sizeof(s_path_map[0]); i++) {
@@ -63,6 +64,10 @@ const char *translate_path(const char *path, char *buffer, size_t buf_size) {
         l_warn("[io] unmapped absolute path: %s", path);
     }
     return path;
+}
+
+const char *translate_path(const char *path, char *buffer, size_t buf_size) {
+    return shopmod_redirect(map_android_path(path, buffer, buf_size));
 }
 
 // ============================================================================

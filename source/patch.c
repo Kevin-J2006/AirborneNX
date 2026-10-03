@@ -1,6 +1,7 @@
 #include "patch.h"
 #include "utils/init.h"
 #include "utils/logger.h"
+#include "reimpl/shopmod.h"
 #include <stdio.h>
 
 /* Exact Asphalt 8 4.0.0l arm64-v8a offsets and instruction preimages.  The
@@ -88,6 +89,7 @@ void so_patch(so_module *mod) {
 
     install_age_gate_bypass(mod);
     install_fps_limit(mod);
+    shopmod_install(mod);
 
     l_info("All runtime patches applied successfully.");
 }

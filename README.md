@@ -168,8 +168,15 @@ fps=30
 | :--- | :--- | :--- |
 | `fps` | `30` o `60` | `60` |
 | `shadercache` | `0` (desactivada) o `1` | `1` |
+| `tokencars` | `0` (precios originales) o `1` | `1` |
+| `tokenrate` | créditos por ficha | `150` |
 
 `shadercache` guarda los shaders ya compilados en `cache/shaders.bin` para no recompilarlos en cada arranque. Se puede borrar ese archivo sin problema: se vuelve a generar.
+
+`tokencars` añade un precio en créditos a los vehículos que solo se venden por fichas (que sin
+conexión no se pueden conseguir): fichas × `tokenrate`. 150 es aproximadamente el cambio que usa el
+propio juego en los artículos que tienen los dos precios. El archivo original no se modifica; la
+versión convertida se guarda en `cache/asphaltshop_credits.xtea`.
 
 ---
 
