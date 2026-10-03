@@ -40,6 +40,10 @@
 //    the game and read as JSON, so the JSON reader is hooked instead and the
 //    catalog is rewritten on its way in (see below).
 //
+// Vehicles built from blueprints have a token price too, but the garage shows
+// them the blueprint screen, which needs the server, instead of their prices;
+// see shopmod_install for how they are sold like the others.
+//
 // "tokencars=0" in config.ini turns this off and "tokenrate=<n>" changes the
 // rate.
 //
@@ -297,7 +301,8 @@ const char *shopmod_redirect(const char *path) {
 // jsoncpp, of which it carries three copies; every document goes through
 // Reader::parse(begin, end, root, collectComments). That entry is hooked, and
 // a document that is the catalog is parsed from a rewritten copy in which
-// token-only vehicles get the credits entry as well. Everything else is
+// token-only vehicles get the credits entry as well, and token-only vinyl
+// groups ("decals_group") get a credits price in place of the tokens one. Everything else is
 // passed through untouched.
 //
 // The hook needs the four instructions it overwrites to run somewhere before
@@ -317,6 +322,18 @@ static const uint32_t s_parse_preimage[4] = {
 #define A8_400L_SPARE_CODE_WORD0  0xa9ba6ffcu // stp x28, x27, [sp, #-0x60]!
 #define TRAMPOLINE_WORDS          8
 
+// crafting_cars::CraftingCarsMgr's "is this vehicle built from blueprints"
+// check: a lookup of the car id in the manager's map of craftable cars. The
+// garage (and twenty other places) shows the blueprint screen when it says
+// yes. The map is filled from more than the catalog's "CRAFTABLE" category,
+// so the check itself is made to answer no: the garage then shows the
+// vehicle's prices like any other, and buying it works the same way.
+#define A8_400L_IS_CRAFTABLE        0x560b90u
+#define A8_400L_IS_CRAFTABLE_WORD0  0xf8488c09u // ldr x9, [x0, #0x88]!
+#define A8_400L_IS_CRAFTABLE_WORD1  0xb4000269u // cbz x9, ...
+#define A64_MOV_W0_0                0x52800000u
+#define A64_RET                     0xd65f03c0u
+
 typedef bool (*json_parse_fn)(void *reader, const char *begin, const char *end, void *root, bool collect);
 static json_parse_fn s_parse_original[A8_400L_JSON_PARSE_COUNT];
 
@@ -325,59 +342,123 @@ static uint32_t s_catalog_crc;          // last catalog seen, and its rewrite
 static size_t s_catalog_length, s_rewritten_length;
 static char *s_rewritten;
 
-// Adds a credits price to every token-only "___CAR_PRICE" item. NULL if
-// nothing needed changing.
-static char *convert_catalog(const char *text, size_t length, size_t *out_length, int *changed) {
-    static const char id_key[] = "\"_id\":\"";
+// Where a token-only price array of one catalog item starts and ends.
+typedef struct {
+    size_t at, end;
+    unsigned long tokens;
+    bool vinyl;
+} catalog_edit;
+
+typedef struct {
+    catalog_edit *edits;
+    size_t count, room;
+    int vehicles, vinyls;
+} catalog_scan;
+
+// One item of the catalog, text[start, end): a vehicle ("___CAR_PRICE") or a
+// vinyl group ("decals_group") whose only price is in tokens gets an edit.
+static void scan_item(catalog_scan *scan, const char *text, size_t start, size_t end, const char *id, size_t id_len) {
     static const char token_only[] = "\"price\":[{\"currency\":\"hardcurrency\",\"price\":";
-    size_t id_len = sizeof(id_key) - 1, tok_len = sizeof(token_only) - 1;
+    static const char vinyl[] = "\"category\":[\"decals_group\"]";
+    static const char credits[] = "\"currency\":\"credits\"";
+    const char *item = text + start;
+    size_t len = end - start;
 
-    size_t items = 0;
-    for (const char *p = text; (p = memmem(p, (size_t)(text + length - p), "___CAR_PRICE\"", 13)) != NULL; p += 13)
-        items++;
-    char *out = (char *)malloc(length + items * 64 + 1);
-    if (!out) return NULL;
+    bool vehicle = id_len > 12 && memcmp(id + id_len - 12, "___CAR_PRICE", 12) == 0;
+    bool decal = !vehicle && memmem(item, len, vinyl, sizeof(vinyl) - 1) != NULL;
+    if (!vehicle && !decal) return;
+    if (memmem(item, len, credits, sizeof(credits) - 1)) return; // already sold for credits
 
-    const char *p = text, *end = text + length;
-    size_t o = 0;
-    *changed = 0;
-    for (;;) {
-        const char *id = (const char *)memmem(p, (size_t)(end - p), id_key, id_len);
-        if (!id) break;
-        const char *name = id + id_len;
-        const char *name_end = memchr(name, '"', (size_t)(end - name));
-        if (!name_end) break;
-        const char *next = (const char *)memmem(name_end, (size_t)(end - name_end), id_key, id_len);
-        if (!next) next = end;
+    const char *price = (const char *)memmem(item, len, token_only, sizeof(token_only) - 1);
+    if (!price) return;
+    char *after = NULL;
+    unsigned long tokens = strtoul(price + sizeof(token_only) - 1, &after, 10);
+    if (tokens == 0 || !after || after + 2 > item + len || after[0] != '}' || after[1] != ']') return;
 
-        bool car = (size_t)(name_end - name) > 12 && memcmp(name_end - 12, "___CAR_PRICE", 12) == 0;
-        const char *price = car ? (const char *)memmem(name_end, (size_t)(next - name_end), token_only, tok_len) : NULL;
-        char *after = NULL;
-        unsigned long tokens = price ? strtoul(price + tok_len, &after, 10) : 0;
-        if (price && after && after[0] == '}' && after[1] == ']' && tokens > 0) {
-            memcpy(out + o, p, (size_t)(price - p));
-            o += (size_t)(price - p);
+    if (scan->count == scan->room) {
+        size_t room = scan->room ? scan->room * 2 : 256;
+        catalog_edit *grown = (catalog_edit *)realloc(scan->edits, room * sizeof(catalog_edit));
+        if (!grown) return;
+        scan->edits = grown;
+        scan->room = room;
+    }
+    scan->edits[scan->count++] = (catalog_edit){ (size_t)(price - text), (size_t)(after + 2 - text), tokens, decal };
+    if (vehicle) scan->vehicles++;
+    else scan->vinyls++;
+}
+
+// Gives every token-only vehicle a credits price as well, and sells
+// token-only vinyl groups for credits instead.
+// The items are found by walking the JSON objects: in the catalog the price
+// comes before the "_id" inside each item, so an item is only judged once its
+// closing brace is reached. NULL if nothing needed changing.
+static char *convert_catalog(const char *text, size_t length, size_t *out_length, int *changed) {
+    enum { MAX_DEPTH = 32 };
+    struct { size_t start; const char *id; size_t id_len; } open[MAX_DEPTH];
+    int depth = 0;
+    catalog_scan scan = { 0 };
+
+    for (size_t i = 0; i < length; i++) {
+        char c = text[i];
+        if (c == '"') {
+            size_t s = i + 1, e = s;
+            while (e < length && text[e] != '"') e += (text[e] == '\\') ? 2 : 1;
+            if (depth > 0 && depth <= MAX_DEPTH && e - s == 3 && memcmp(text + s, "_id", 3) == 0 &&
+                e + 2 < length && text[e + 1] == ':' && text[e + 2] == '"') {
+                size_t vs = e + 3, ve = vs;
+                while (ve < length && text[ve] != '"') ve += (text[ve] == '\\') ? 2 : 1;
+                open[depth - 1].id = text + vs;
+                open[depth - 1].id_len = ve - vs;
+                e = ve;
+            }
+            i = e;
+        } else if (c == '{') {
+            if (depth < MAX_DEPTH) {
+                open[depth].start = i;
+                open[depth].id = NULL;
+            }
+            depth++;
+        } else if (c == '}') {
+            if (depth == 0) break;
+            depth--;
+            if (depth < MAX_DEPTH && open[depth].id)
+                scan_item(&scan, text, open[depth].start, i + 1, open[depth].id, open[depth].id_len);
+        }
+    }
+
+    *changed = scan.vehicles + scan.vinyls;
+    if (!*changed) {
+        free(scan.edits);
+        return NULL;
+    }
+    char *out = (char *)malloc(length + scan.count * 64 + 1);
+    if (!out) {
+        free(scan.edits);
+        return NULL;
+    }
+    size_t o = 0, from = 0;
+    for (size_t k = 0; k < scan.count; k++) {
+        const catalog_edit *e = &scan.edits[k];
+        memcpy(out + o, text + from, e->at - from);
+        o += e->at - from;
+        // The paint screen shows a single price, the tokens one when there is
+        // one, so vinyls are sold for credits only; the garage offers both.
+        if (e->vinyl)
+            o += (size_t)sprintf(out + o, "\"price\":[{\"currency\":\"credits\",\"price\":%lu}]",
+                                 e->tokens * (unsigned long)s_rate);
+        else
             o += (size_t)sprintf(out + o,
                                  "\"price\":[{\"currency\":\"credits\",\"price\":%lu},"
                                  "{\"currency\":\"hardcurrency\",\"price\":%lu}]",
-                                 tokens * (unsigned long)s_rate, tokens);
-            p = after + 2;
-            (*changed)++;
-        }
-        memcpy(out + o, p, (size_t)(next - p));
-        o += (size_t)(next - p);
-        p = next;
+                                 e->tokens * (unsigned long)s_rate, e->tokens);
+        from = e->end;
     }
-    memcpy(out + o, p, (size_t)(end - p));
-    o += (size_t)(end - p);
+    memcpy(out + o, text + from, length - from);
+    o += length - from;
     out[o] = 0;
-    if (*changed)
-        l_info("[shop] store catalog: %d token-only vehicles also priced in credits (%d per token)",
-               *changed, s_rate);
-    if (!*changed) {
-        free(out);
-        return NULL;
-    }
+    free(scan.edits);
+    l_info("[shop] store catalog: %d token-only vehicles also priced in credits, %d vinyl groups sold for credits "
+           "(%d per token)", scan.vehicles, scan.vinyls, s_rate);
     *out_length = o;
     return out;
 }
@@ -417,8 +498,20 @@ static bool parse_hook_0(void *r, const char *b, const char *e, void *v, bool c)
 static bool parse_hook_1(void *r, const char *b, const char *e, void *v, bool c) { return parse_hooked(1, r, b, e, v, c); }
 static bool parse_hook_2(void *r, const char *b, const char *e, void *v, bool c) { return parse_hooked(2, r, b, e, v, c); }
 
+static void sell_blueprint_vehicles(struct so_module *mod) {
+    uint32_t *words = (uint32_t *)so_rw_ptr(mod, mod->base_addr + A8_400L_IS_CRAFTABLE);
+    if (words[0] != A8_400L_IS_CRAFTABLE_WORD0 || words[1] != A8_400L_IS_CRAFTABLE_WORD1) {
+        l_warn("[shop] blueprint check not where expected; blueprint vehicles stay unavailable");
+        return;
+    }
+    words[0] = A64_MOV_W0_0;
+    words[1] = A64_RET;
+    l_info("[shop] blueprint vehicles sold like the others");
+}
+
 void shopmod_install(struct so_module *mod) {
     if (!configured_on()) return;
+    sell_blueprint_vehicles(mod);
     static const json_parse_fn hooks[A8_400L_JSON_PARSE_COUNT] = { parse_hook_0, parse_hook_1, parse_hook_2 };
 
     uint32_t *spare = (uint32_t *)so_rw_ptr(mod, mod->base_addr + A8_400L_SPARE_CODE);
