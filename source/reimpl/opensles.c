@@ -1,8 +1,8 @@
 #include "opensles.h"
 #include "pthr.h"
 #include "../utils/logger.h"
-#include <SDL2/SDL.h>
 #include <switch.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -40,8 +40,17 @@ SLInterfaceID SL_IID_PITCH_ptr                    = &SL_IID_PITCH_val;
 #define MAX_PLAYERS     16
 #define MAX_QUEUED      32
 
-static SDL_AudioDeviceID s_audio_device = 0;
+// Output: periods of 1024 frames (21 ms), three of them queued in audout.
+#define OUTPUT_FRAMES   1024
+#define OUTPUT_BUFFERS  3
+#define OUTPUT_BYTES    (OUTPUT_FRAMES * OUTPUT_CHANNELS * 2)
+#define OUTPUT_STACK    0x40000
+#define OUTPUT_WAIT_NS  100000000ULL  // how long to wait for a period to finish
+#define OUTPUT_STALLED  30            // waits in a row with nothing played: restart
+
 static bool s_audio_inited = false;
+static Thread s_output_thread;
+static AudioOutBuffer s_output[OUTPUT_BUFFERS];
 
 // ============================================================================
 // Standard Khronos OpenSL ES 1.0.1 VTable Definitions (Strict ABI Compliance)
@@ -206,11 +215,19 @@ struct AudioPlayerObjectInstance {
     AndroidConfigItfInstance configItf;
     uint32_t channels;
     uint32_t rate;
+    bool in_callback;   // the mixer is inside the guest's buffer callback
+    bool destroyed;     // Destroy came in meanwhile: the mixer frees it
 };
 
-// All players, mixed together by the SDL audio thread. The lock is a libnx
-// RMutex because the guest's buffer callback re-enters Enqueue while the
-// mixer holds it.
+// All players, mixed together by the output thread; the lock guards the table
+// and each player's queue and state.
+//
+// It is never held across the guest's buffer callback. The game's sound
+// driver takes its own mutex in that callback, and takes the same mutex
+// around its calls to SetPlayState when it suspends and resumes audio (every
+// loading screen and pause). Calling back with this lock held is a lock-order
+// inversion: the mixer waits for the driver's mutex while the thread holding
+// it waits for this lock, and the sound never comes back.
 static AudioPlayerObjectInstance *s_players[MAX_PLAYERS];
 static RMutex s_audio_lock;
 
@@ -227,9 +244,11 @@ static inline int16_t clamp16(int32_t v) {
     return (int16_t)v;
 }
 
-static void mix_player(AudioPlayerObjectInstance *p, int16_t *out, int frames) {
+// Mixes one player into `out`. Called with the lock held; drops it around the
+// guest's callback. False if the player was destroyed meanwhile and is gone.
+static bool mix_player(AudioPlayerObjectInstance *p, int16_t *out, int frames) {
     BufferQueueItfInstance *bq = &p->bqItf;
-    if (p->playItf.state != SL_PLAYSTATE_PLAYING) return;
+    if (p->playItf.state != SL_PLAYSTATE_PLAYING) return true;
 
     const uint32_t frame_bytes = p->channels * 2;
     const uint32_t step = (uint32_t)(((uint64_t)p->rate << 16) / OUTPUT_RATE);
@@ -264,22 +283,89 @@ static void mix_player(AudioPlayerObjectInstance *p, int16_t *out, int frames) {
             bq->play_index++;
             // Buffer finished: this is the moment OpenSL ES notifies the app,
             // which normally responds by enqueueing the next buffer.
-            if (bq->callback) bq->callback((void *)bq, bq->context);
+            void (*callback)(void *, void *) = bq->callback;
+            void *context = bq->context;
+            if (callback) {
+                p->in_callback = true;
+                rmutexUnlock(&s_audio_lock);
+                callback((void *)bq, context);
+                rmutexLock(&s_audio_lock);
+                p->in_callback = false;
+                if (p->destroyed) {
+                    free(p);
+                    return false;
+                }
+                // Paused or stopped while the callback ran: nothing more to
+                // play from this player in this period.
+                if (p->playItf.state != SL_PLAYSTATE_PLAYING) break;
+            }
         }
     }
+    return true;
 }
 
-static void audio_callback(void *userdata, Uint8 *stream, int len) {
-    (void)userdata;
-    pthr_enter_host_thread();
-    memset(stream, 0, len);
-
-    int frames = len / (OUTPUT_CHANNELS * 2);
+// Fills one output period with whatever the players have queued.
+static void mix_period(int16_t *out) {
+    memset(out, 0, OUTPUT_BYTES);
     rmutexLock(&s_audio_lock);
     for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (s_players[i]) mix_player(s_players[i], (int16_t *)stream, frames);
+        if (s_players[i]) mix_player(s_players[i], out, OUTPUT_FRAMES);
     }
     rmutexUnlock(&s_audio_lock);
+}
+
+// The output thread: keeps every buffer that audout has finished refilled and
+// queued again.
+//
+// It holds no state that a late wake-up can invalidate. SDL's audio driver
+// for the Switch, used here before, waits for the buffer it has just queued
+// to reach the "playing" state; a thread that is kept off the CPU for a few
+// tens of milliseconds (a loading screen is enough) finds it already played,
+// waits for that state forever, and the game goes on without sound. Here a
+// late thread only costs the periods that were missed.
+static void output_main(void *arg) {
+    (void)arg;
+    pthr_enter_host_thread();
+
+    bool queued[OUTPUT_BUFFERS] = { false };
+    int stalled = 0;
+    for (;;) {
+        for (int i = 0; i < OUTPUT_BUFFERS; i++) {
+            if (queued[i]) continue;
+            mix_period((int16_t *)s_output[i].buffer);
+            queued[i] = R_SUCCEEDED(audoutAppendAudioOutBuffer(&s_output[i]));
+        }
+
+        AudioOutBuffer *done = NULL;
+        u32 count = 0;
+        bool released = false;
+        Result rc = audoutWaitPlayFinish(&done, &count, OUTPUT_WAIT_NS);
+        // One buffer comes back per call, and the event behind the wait may
+        // stand for several: collect them all, also after a timeout.
+        for (;;) {
+            if (R_SUCCEEDED(rc) && count > 0) {
+                for (int i = 0; i < OUTPUT_BUFFERS; i++) {
+                    if (done == &s_output[i]) queued[i] = false;
+                }
+                released = true;
+            }
+            done = NULL;
+            count = 0;
+            rc = audoutGetReleasedAudioOutBuffer(&done, &count);
+            if (R_FAILED(rc) || count == 0) break;
+        }
+
+        // Nothing played for three seconds: the output itself has stopped.
+        // Start it again and queue everything anew.
+        stalled = released ? 0 : stalled + 1;
+        if (stalled >= OUTPUT_STALLED) {
+            l_warn("[OpenSL] audio output stalled, restarting it");
+            audoutStopAudioOut();
+            audoutStartAudioOut();
+            memset(queued, 0, sizeof(queued));
+            stalled = 0;
+        }
+    }
 }
 
 // ============================================================================
@@ -365,12 +451,17 @@ static uint32_t PlayerObj_GetInterface(void *self, const SLInterfaceID iid, void
 
 static void PlayerObj_Destroy(void *self) {
     l_debug("[OpenSL] AudioPlayer destroyed");
+    AudioPlayerObjectInstance *player = (AudioPlayerObjectInstance *)self;
     rmutexLock(&s_audio_lock);
     for (int i = 0; i < MAX_PLAYERS; i++) {
-        if (s_players[i] == self) s_players[i] = NULL;
+        if (s_players[i] == player) s_players[i] = NULL;
     }
+    // The mixer may be inside this player's callback, with the lock released:
+    // it frees the player when the callback returns.
+    bool busy = player->in_callback;
+    if (busy) player->destroyed = true;
     rmutexUnlock(&s_audio_lock);
-    free(self);
+    if (!busy) free(player);
 }
 
 static const struct SLObjectItf_ s_PlayerObj_Vtbl = {
@@ -725,26 +816,51 @@ void opensles_init(void) {
     if (s_audio_inited) return;
     s_audio_inited = true;
 
-    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
-        l_warn("OpenSL ES bridge: SDL audio init failed: %s", SDL_GetError());
+    Result rc = audoutInitialize();
+    if (R_FAILED(rc)) {
+        l_warn("OpenSL ES bridge: audoutInitialize failed: 0x%x", rc);
+        return;
+    }
+    for (int i = 0; i < OUTPUT_BUFFERS; i++) {
+        // audout wants page-aligned buffers of whole pages; a period is one.
+        void *data = memalign(0x1000, OUTPUT_BYTES);
+        if (!data) {
+            l_warn("OpenSL ES bridge: no memory for the audio buffers");
+            return;
+        }
+        memset(data, 0, OUTPUT_BYTES);
+        s_output[i].next = NULL;
+        s_output[i].buffer = data;
+        s_output[i].buffer_size = OUTPUT_BYTES;
+        s_output[i].data_size = OUTPUT_BYTES;
+        s_output[i].data_offset = 0;
+    }
+    rc = audoutStartAudioOut();
+    if (R_FAILED(rc)) {
+        l_warn("OpenSL ES bridge: audoutStartAudioOut failed: 0x%x", rc);
         return;
     }
 
-    SDL_AudioSpec want, have;
-    memset(&want, 0, sizeof(want));
-    want.freq = OUTPUT_RATE;
-    want.format = AUDIO_S16LSB;
-    want.channels = OUTPUT_CHANNELS;
-    want.samples = 1024;
-    want.callback = audio_callback;
-
-    s_audio_device = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
-    if (s_audio_device > 0) {
-        l_info("OpenSL ES bridge: SDL audio device opened (freq=%d, ch=%d)", have.freq, have.channels);
-        SDL_PauseAudioDevice(s_audio_device, 0);
-    } else {
-        l_warn("OpenSL ES bridge: SDL_OpenAudioDevice failed: %s", SDL_GetError());
+    // Same priority as the thread that starts the game, as before, but free
+    // to run on any core, so a busy core does not hold the sound back.
+    s32 prio = 0x2C;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    rc = threadCreate(&s_output_thread, output_main, NULL, NULL, OUTPUT_STACK, prio, -2);
+    if (R_FAILED(rc)) {
+        l_warn("OpenSL ES bridge: could not create the audio thread: 0x%x", rc);
+        return;
     }
+    u64 mask = 0;
+    if (R_SUCCEEDED(svcGetInfo(&mask, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && mask)
+        svcSetThreadCoreMask(s_output_thread.handle, -1, (u32)mask);
+    rc = threadStart(&s_output_thread);
+    if (R_FAILED(rc)) {
+        l_warn("OpenSL ES bridge: could not start the audio thread: 0x%x", rc);
+        threadClose(&s_output_thread);
+        return;
+    }
+    l_info("OpenSL ES bridge: audio output opened (freq=%u, ch=%u)",
+           (unsigned)audoutGetSampleRate(), (unsigned)audoutGetChannelCount());
 }
 
 uint32_t wrap_slCreateEngine(

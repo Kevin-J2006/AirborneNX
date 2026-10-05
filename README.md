@@ -196,8 +196,8 @@ Atmosphère, el informe queda en `sdmc:/atmosphere/crash_reports/`. Adjunta ambo
 
 ## Compilación
 
-Requisitos: [devkitPro](https://devkitpro.org/) con `devkitA64`, `libnx` y los portlibs `switch-mesa`,
-`switch-sdl2` y `switch-zlib`.
+Requisitos: [devkitPro](https://devkitpro.org/) con `devkitA64`, `libnx` y los portlibs `switch-mesa`
+y `switch-zlib`.
 
 ```sh
 make              # versión normal
@@ -219,7 +219,7 @@ instrucciones originales antes de escribir; con otra versión el port se detiene
 * **Gráficos**: el juego usa OpenGL ES 2.0 sobre Mesa/nouveau. Todos sus contextos se respaldan con uno
   solo real, compartido entre hilos bajo un candado, porque Mesa en Switch no comparte objetos entre
   contextos; las texturas ASTC se descomprimen fuera de ese candado.
-* **Audio**: OpenSL ES sobre SDL2.
+* **Audio**: OpenSL ES sobre `audout` de libnx, con un hilo de salida propio.
 
 ---
 
@@ -246,7 +246,6 @@ Java y de saltar la pantalla de edad parten de su trabajo. Sin ese proyecto, est
 
 * **devkitPro, devkitA64 y libnx**: la base para hacer homebrew de Nintendo Switch.
 * **Mesa y nouveau** (`switch-mesa`): OpenGL ES y EGL en la consola.
-* **SDL2** (`switch-sdl2`): salida de audio.
 * **zlib** (`switch-zlib`).
 * **Atmosphère**: el entorno donde corre el homebrew.
 * **Eden**: el emulador usado durante el desarrollo.

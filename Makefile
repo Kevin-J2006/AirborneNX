@@ -44,7 +44,7 @@ CXXFLAGS    := $(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++17
 ASFLAGS     := -g $(ARCH)
 LDFLAGS     =  -specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS        := -lEGL -lGLESv2 -lglapi -ldrm_nouveau -lSDL2 -lstdc++ -lnx -lz -lm
+LIBS        := -lEGL -lGLESv2 -lglapi -ldrm_nouveau -lstdc++ -lnx -lz -lm
 
 LIBDIRS     := $(PORTLIBS) $(LIBNX)
 

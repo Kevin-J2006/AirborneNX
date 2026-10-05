@@ -19,7 +19,7 @@
 // Installs the bionic TLS block for the main thread. Safe to call repeatedly.
 void pthr_init_main(void);
 
-// Must be called on a thread the guest did not create (e.g. the SDL audio
+// Must be called on a thread the guest did not create (e.g. the audio output
 // thread) before it runs guest code, so the guest finds a valid TLS block.
 void pthr_enter_host_thread(void);
 
