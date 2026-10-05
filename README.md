@@ -171,6 +171,7 @@ fps=30
 | `tokencars` | `0` (precios originales) o `1` | `1` |
 | `tokenrate` | créditos por ficha | `100` |
 | `economy` | `0` (precios del juego) o `1` | `1` |
+| `fpsoverlay` | `0` (oculto) o `1` (visible al arrancar) | `0` |
 
 `shadercache` guarda los shaders ya compilados en `cache/shaders.bin` para no recompilarlos en cada arranque. Se puede borrar ese archivo sin problema: se vuelve a generar.
 
@@ -184,6 +185,10 @@ el 40 % y el Audi R8 e-tron cuesta 2500 créditos para que sea un primer coche a
 
 El archivo original no se modifica; la
 versión convertida se guarda en `cache/asphaltshop_credits.xtea`.
+
+`fpsoverlay` es el medidor de rendimiento: FPS, tiempo de cuadro medio y peor (en ms) y una gráfica
+de los últimos 120 cuadros, en la esquina superior izquierda. Se muestra y se oculta en cualquier
+momento pulsando los dos sticks a la vez (L3 + R3).
 
 ---
 

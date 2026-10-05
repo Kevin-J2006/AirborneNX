@@ -4,6 +4,7 @@
 #include "pthr.h"
 #include "gldiag.h"
 #include "gltrace.h"
+#include "fpsoverlay.h"
 #include "../utils/prof.h"
 #include <switch.h>
 #include <stdio.h>
@@ -369,6 +370,7 @@ EGLBoolean wrap_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     gldiag_frame(n);
 #endif
     gltrace_frame(n);
+    fpsoverlay_frame();
     PROF_BEGIN();
     EGLBoolean ok = eglSwapBuffers(dpy, surface);
     PROF_END(PROF_SWAP);

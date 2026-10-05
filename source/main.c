@@ -11,6 +11,7 @@
 #include "utils/logger.h"
 #include "reimpl/egl.h"
 #include "reimpl/controls.h"
+#include "reimpl/fpsoverlay.h"
 #include "reimpl/opensles.h"
 #include "reimpl/pthr.h"
 #include "reimpl/io.h"
@@ -54,6 +55,7 @@ int main(int argc, char *argv[]) {
     l_info("AirborneNX " AIRBORNE_VERSION ": Asphalt 8 port for Nintendo Switch starting...");
 
     controls_init();
+    fpsoverlay_init();
     opensles_init();
     java_init();
 

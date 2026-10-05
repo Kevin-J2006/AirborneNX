@@ -1,4 +1,5 @@
 #include "controls.h"
+#include "fpsoverlay.h"
 #include "../utils/logger.h"
 #include <switch.h>
 #include <math.h>
@@ -225,6 +226,14 @@ static void poll_gamepad(void) {
 
 void controls_poll(void) {
     padUpdate(&s_pad);
+
+    // Both sticks pressed together show or hide the frame rate overlay.
+    static bool s_combo_held = false;
+    const u64 combo = HidNpadButton_StickL | HidNpadButton_StickR;
+    bool held = (padGetButtons(&s_pad) & combo) == combo;
+    if (held && !s_combo_held) fpsoverlay_toggle();
+    s_combo_held = held;
+
     poll_gamepad();
     poll_touch();
 }
