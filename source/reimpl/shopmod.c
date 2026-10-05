@@ -24,9 +24,17 @@
 //
 // (SC = credits, HC = tokens). Vehicles with both prices already exist, and
 // the garage then offers both buttons, so a token-only car is given a credit
-// price as well: its tokens times a rate. 150 is the game's own exchange: an
-// upgrade priced in both currencies costs a median of 140 credits per token,
-// and cars priced in both cost 120 to 200.
+// price as well: its tokens times a rate. The game's own exchange is about
+// 150 (an upgrade priced in both currencies costs a median of 140 credits per
+// token), which left token cars far dearer than the credit cars of their
+// class, so the default is 100.
+//
+// The prices themselves are also brought down ("economy"). This version's are
+// tuned for selling credits: buying every vehicle costs 111 million and
+// upgrading them all 259 million, against a few thousand credits a race, and
+// offline there is nothing to buy credits with. Vehicle prices are cut by
+// bracket, upgrades cost 40%, and the first car worth buying (Audi R8 e-tron)
+// costs 2500 so that a new player can afford it straight away.
 //
 // The game has the prices in two places, and both are converted:
 //
@@ -44,8 +52,8 @@
 // them the blueprint screen, which needs the server, instead of their prices;
 // see shopmod_install for how they are sold like the others.
 //
-// "tokencars=0" in config.ini turns this off and "tokenrate=<n>" changes the
-// rate.
+// In config.ini, "tokencars=0" turns all of this off, "tokenrate=<n>" changes
+// the rate and "economy=0" keeps the game's own prices.
 //
 // File format: bytes 01 00, then XTEA (32 rounds, ECB, little-endian) over
 // u32 text length, u32 crc32 of the text, the text, zero padding to 8 bytes.
@@ -56,8 +64,8 @@
 #define SHOP_SOURCE      FILES_PATH "xml/" SHOP_NAME
 #define SHOP_CACHE       CACHE_PATH "asphaltshop_credits.xtea"
 #define SHOP_STAMP       CACHE_PATH "asphaltshop_credits.txt"
-#define SHOP_FORMAT      5          // bump when the conversion changes
-#define DEFAULT_RATE     150
+#define SHOP_FORMAT      6          // bump when the conversion changes
+#define DEFAULT_RATE     100
 #define XTEA_ROUNDS      32
 #define XTEA_DELTA       0x9E3779B9u
 
@@ -71,6 +79,7 @@ extern uintptr_t game_text_base(void);
 static Mutex s_lock;
 static int s_state;                 // 0 not decided yet, 1 serve the copy, -1 serve the original
 static int s_rate = DEFAULT_RATE;
+static int s_economy = 1;
 
 static bool configured_on(void) {
     int on = 1;
@@ -81,6 +90,7 @@ static bool configured_on(void) {
         int value = 0;
         if (sscanf(line, " tokencars = %d", &value) == 1) on = value;
         if (sscanf(line, " tokenrate = %d", &value) == 1 && value > 0 && value <= 100000) s_rate = value;
+        if (sscanf(line, " economy = %d", &value) == 1) s_economy = value != 0;
     }
     fclose(f);
     return on != 0;
@@ -139,8 +149,8 @@ static uint8_t *read_file(const char *path, size_t *size) {
 
 // What the copy was made from; it is only reused while this still matches.
 static void stamp_of(const struct stat *source, char *out, size_t size) {
-    snprintf(out, size, "format %d rate %d source %lld bytes, modified %lld\n", SHOP_FORMAT, s_rate,
-             (long long)source->st_size, (long long)source->st_mtime);
+    snprintf(out, size, "format %d rate %d economy %d source %lld bytes, modified %lld\n", SHOP_FORMAT, s_rate,
+             s_economy, (long long)source->st_size, (long long)source->st_mtime);
 }
 
 static bool copy_is_current(const char *stamp) {
@@ -154,35 +164,107 @@ static bool copy_is_current(const char *stamp) {
     return ok;
 }
 
-// Rewrites every token-only CAR_PRICE row; returns the new text (malloc'd).
-static char *convert(const char *text, size_t length, size_t *out_length, int *changed) {
-    static const char row[] = "Id=\"CAR_PRICE\" Price_SC=\"0\" Price_HC=\"";
-    size_t row_len = sizeof(row) - 1;
+// ----------------------------------------------------------------------------
+// The price rules, shared by the shop database and the store catalog.
+// ----------------------------------------------------------------------------
+#define STARTER_CAR_ID     2                    // Audi R8 e-tron, class D
+#define STARTER_CAR_ITEM   "Audi_R8_etron___CAR_PRICE"
+#define STARTER_CAR_PRICE  2500
+#define UPGRADE_PERCENT    40
+
+static unsigned long round_price(unsigned long price) {
+    unsigned long step = price < 10000 ? 50 : 500;
+    return (price + step / 2) / step * step;
+}
+
+// A vehicle's credits price. Each bracket keeps a share of the price; a
+// price never drops below what the top of the bracket under it becomes, so a
+// dearer car is never cheaper than a cheaper one.
+static unsigned long vehicle_price(unsigned long price) {
+    static const struct { unsigned long up_to; unsigned percent; } brackets[] = {
+        { 50000, 100 }, { 250000, 70 }, { 1000000, 55 }, { (unsigned long)-1, 40 },
+    };
+    if (!s_economy) return price;
+    unsigned long floor = 0;
+    for (size_t i = 0; i < sizeof(brackets) / sizeof(brackets[0]); i++) {
+        if (price <= brackets[i].up_to) {
+            unsigned long cut = price / 100 * brackets[i].percent + price % 100 * brackets[i].percent / 100;
+            return round_price(cut > floor ? cut : floor);
+        }
+        unsigned long top = brackets[i].up_to / 100 * brackets[i].percent;
+        if (top > floor) floor = top;
+    }
+    return price;
+}
+
+static unsigned long upgrade_price(unsigned long price) {
+    if (!s_economy) return price;
+    unsigned long cut = (price * UPGRADE_PERCENT + 50) / 100;
+    return cut >= 100 ? (cut + 5) / 10 * 10 : cut;
+}
+
+typedef struct {
+    int converted;  // token-only vehicles given a credits price
+    int repriced;   // vehicles whose credits price changed
+    int upgrades;   // upgrade rows made cheaper
+} shop_counts;
+
+// Rewrites the price rows of the shop database, which read
+//     <Price Id="CAR_PRICE" Price_SC="0" Price_HC="8500" Price_MP="0" />
+//     <Price Id="NITRO_UPGRADE_3" Price_SC="19500" Price_HC="0" Price_MP="0" />
+// Only the credits figure (Price_SC) changes. Returns the new text (malloc'd).
+static char *convert(const char *text, size_t length, size_t *out_length, shop_counts *counts) {
+    static const char car_tag[] = "<Car carId=\"", sc_key[] = "\" Price_SC=\"", hc_key[] = "\" Price_HC=\"";
     char *out = (char *)malloc(length + length / 8 + 1024);
     if (!out) return NULL;
 
     size_t o = 0;
     const char *p = text, *end = text + length;
-    *changed = 0;
+    long car_id = -1;
+    memset(counts, 0, sizeof(*counts));
     for (;;) {
-        const char *hit = (const char *)memmem(p, (size_t)(end - p), row, row_len);
+        const char *hit = (const char *)memmem(p, (size_t)(end - p), sc_key, sizeof(sc_key) - 1);
         if (!hit) break;
-        const char *num = hit + row_len;
+
+        // Which car these rows belong to: the last <Car> tag before the row.
+        for (const char *c = p; (c = (const char *)memmem(c, (size_t)(hit - c), car_tag, sizeof(car_tag) - 1)) != NULL;) {
+            c += sizeof(car_tag) - 1;
+            car_id = strtol(c, NULL, 10);
+        }
+
+        // The row's Id is the quoted word that ends where Price_SC starts.
+        const char *name = hit;
+        while (name > p && name[-1] != '"') name--;
+        size_t name_len = (size_t)(hit - name);
+        const char *num = hit + sizeof(sc_key) - 1;
         char *after = NULL;
-        unsigned long tokens = strtoul(num, &after, 10);
-        if (after == num || *after != '"' || tokens == 0) {
-            // Not a token price after all: copy through and keep looking.
-            memcpy(out + o, p, (size_t)(num - p));
-            o += (size_t)(num - p);
+        unsigned long credits = strtoul(num, &after, 10);
+        unsigned long tokens = 0;
+        if (after != num && (size_t)(end - after) > sizeof(hc_key) && memcmp(after, hc_key, sizeof(hc_key) - 1) == 0)
+            tokens = strtoul(after + sizeof(hc_key) - 1, NULL, 10);
+
+        unsigned long price = credits;
+        if (after == num) {
+            // not a number: leave the row alone
+        } else if (name_len == 9 && memcmp(name, "CAR_PRICE", 9) == 0) {
+            if (s_economy && car_id == STARTER_CAR_ID) price = STARTER_CAR_PRICE;
+            else if (credits) price = vehicle_price(credits);
+            else if (tokens) price = vehicle_price(tokens * (unsigned long)s_rate);
+            if (!credits && tokens) counts->converted++;
+            else if (price != credits) counts->repriced++;
+        } else if (credits && memmem(name, name_len, "_UPGRADE_", 9)) {
+            price = upgrade_price(credits);
+            if (price != credits) counts->upgrades++;
+        }
+
+        memcpy(out + o, p, (size_t)(num - p));
+        o += (size_t)(num - p);
+        if (after == num) {
             p = num;
             continue;
         }
-        memcpy(out + o, p, (size_t)(hit - p));
-        o += (size_t)(hit - p);
-        o += (size_t)sprintf(out + o, "Id=\"CAR_PRICE\" Price_SC=\"%lu\" Price_HC=\"%lu",
-                             tokens * (unsigned long)s_rate, tokens);
+        o += (size_t)sprintf(out + o, "%lu", price);
         p = after;
-        (*changed)++;
     }
     memcpy(out + o, p, (size_t)(end - p));
     o += (size_t)(end - p);
@@ -215,9 +297,9 @@ static bool build_copy(const char *stamp) {
         return false;
     }
 
-    int changed = 0;
+    shop_counts counts;
     size_t new_length = 0;
-    char *text = convert((const char *)plain + 8, length, &new_length, &changed);
+    char *text = convert((const char *)plain + 8, length, &new_length, &counts);
     free(blob);
     if (!text) return false;
 
@@ -248,7 +330,8 @@ static bool build_copy(const char *stamp) {
         l_warn("[shop] cannot write %s; vehicles keep their prices", SHOP_CACHE);
         return false;
     }
-    l_info("[shop] shop database: %d token-only vehicles also priced in credits (%d per token)", changed, s_rate);
+    l_info("[shop] shop database: %d token-only vehicles priced in credits (%d per token), %d vehicles and "
+           "%d upgrades repriced", counts.converted, s_rate, counts.repriced, counts.upgrades);
     return true;
 }
 
@@ -342,39 +425,26 @@ static uint32_t s_catalog_crc;          // last catalog seen, and its rewrite
 static size_t s_catalog_length, s_rewritten_length;
 static char *s_rewritten;
 
-// Where a token-only price array of one catalog item starts and ends.
+// One change to the catalog text: text[at, end) is replaced.
+typedef enum {
+    EDIT_ADD_CREDITS,   // token-only vehicle: credits entry added before the tokens one
+    EDIT_VINYL,         // token-only vinyl group: sold for credits instead
+    EDIT_CREDITS,       // a credits figure replaced
+} edit_kind;
+
 typedef struct {
     size_t at, end;
-    unsigned long tokens;
-    bool vinyl;
+    edit_kind kind;
+    unsigned long credits, tokens;
 } catalog_edit;
 
 typedef struct {
     catalog_edit *edits;
     size_t count, room;
-    int vehicles, vinyls;
+    int converted, repriced, vinyls;
 } catalog_scan;
 
-// One item of the catalog, text[start, end): a vehicle ("___CAR_PRICE") or a
-// vinyl group ("decals_group") whose only price is in tokens gets an edit.
-static void scan_item(catalog_scan *scan, const char *text, size_t start, size_t end, const char *id, size_t id_len) {
-    static const char token_only[] = "\"price\":[{\"currency\":\"hardcurrency\",\"price\":";
-    static const char vinyl[] = "\"category\":[\"decals_group\"]";
-    static const char credits[] = "\"currency\":\"credits\"";
-    const char *item = text + start;
-    size_t len = end - start;
-
-    bool vehicle = id_len > 12 && memcmp(id + id_len - 12, "___CAR_PRICE", 12) == 0;
-    bool decal = !vehicle && memmem(item, len, vinyl, sizeof(vinyl) - 1) != NULL;
-    if (!vehicle && !decal) return;
-    if (memmem(item, len, credits, sizeof(credits) - 1)) return; // already sold for credits
-
-    const char *price = (const char *)memmem(item, len, token_only, sizeof(token_only) - 1);
-    if (!price) return;
-    char *after = NULL;
-    unsigned long tokens = strtoul(price + sizeof(token_only) - 1, &after, 10);
-    if (tokens == 0 || !after || after + 2 > item + len || after[0] != '}' || after[1] != ']') return;
-
+static void add_edit(catalog_scan *scan, catalog_edit edit) {
     if (scan->count == scan->room) {
         size_t room = scan->room ? scan->room * 2 : 256;
         catalog_edit *grown = (catalog_edit *)realloc(scan->edits, room * sizeof(catalog_edit));
@@ -382,13 +452,53 @@ static void scan_item(catalog_scan *scan, const char *text, size_t start, size_t
         scan->edits = grown;
         scan->room = room;
     }
-    scan->edits[scan->count++] = (catalog_edit){ (size_t)(price - text), (size_t)(after + 2 - text), tokens, decal };
-    if (vehicle) scan->vehicles++;
+    scan->edits[scan->count++] = edit;
+}
+
+// One item of the catalog, text[start, end): a vehicle ("___CAR_PRICE") or a
+// vinyl group ("decals_group").
+static void scan_item(catalog_scan *scan, const char *text, size_t start, size_t end, const char *id, size_t id_len) {
+    static const char token_only[] = "\"price\":[{\"currency\":\"hardcurrency\",\"price\":";
+    static const char vinyl[] = "\"category\":[\"decals_group\"]";
+    static const char credits_key[] = "{\"currency\":\"credits\",\"price\":";
+    const char *item = text + start;
+    size_t len = end - start;
+
+    bool vehicle = id_len > 12 && memcmp(id + id_len - 12, "___CAR_PRICE", 12) == 0;
+    bool decal = !vehicle && memmem(item, len, vinyl, sizeof(vinyl) - 1) != NULL;
+    if (!vehicle && !decal) return;
+
+    const char *has_credits = (const char *)memmem(item, len, credits_key, sizeof(credits_key) - 1);
+    if (has_credits) {
+        // Already sold for credits: only vehicles change, and only the figure.
+        if (!vehicle) return;
+        const char *num = has_credits + sizeof(credits_key) - 1;
+        char *after = NULL;
+        unsigned long credits = strtoul(num, &after, 10);
+        if (after == num || credits == 0) return;
+        bool starter = s_economy && id_len == sizeof(STARTER_CAR_ITEM) - 1 && memcmp(id, STARTER_CAR_ITEM, id_len) == 0;
+        unsigned long price = starter ? STARTER_CAR_PRICE : vehicle_price(credits);
+        if (price == credits) return;
+        add_edit(scan, (catalog_edit){ (size_t)(num - text), (size_t)(after - text), EDIT_CREDITS, price, 0 });
+        scan->repriced++;
+        return;
+    }
+
+    const char *price = (const char *)memmem(item, len, token_only, sizeof(token_only) - 1);
+    if (!price) return;
+    char *after = NULL;
+    unsigned long tokens = strtoul(price + sizeof(token_only) - 1, &after, 10);
+    if (tokens == 0 || !after || after + 2 > item + len || after[0] != '}' || after[1] != ']') return;
+
+    unsigned long credits = tokens * (unsigned long)s_rate;
+    if (vehicle) credits = vehicle_price(credits);
+    add_edit(scan, (catalog_edit){ (size_t)(price - text), (size_t)(after + 2 - text),
+                                   vehicle ? EDIT_ADD_CREDITS : EDIT_VINYL, credits, tokens });
+    if (vehicle) scan->converted++;
     else scan->vinyls++;
 }
 
-// Gives every token-only vehicle a credits price as well, and sells
-// token-only vinyl groups for credits instead.
+// Applies the price rules to the vehicles and vinyl groups of the catalog.
 // The items are found by walking the JSON objects: in the catalog the price
 // comes before the "_id" inside each item, so an item is only judged once its
 // closing brace is reached. NULL if nothing needed changing.
@@ -426,8 +536,8 @@ static char *convert_catalog(const char *text, size_t length, size_t *out_length
         }
     }
 
-    *changed = scan.vehicles + scan.vinyls;
-    if (!*changed) {
+    *changed = (int)scan.count;
+    if (!scan.count) {
         free(scan.edits);
         return NULL;
     }
@@ -441,24 +551,30 @@ static char *convert_catalog(const char *text, size_t length, size_t *out_length
         const catalog_edit *e = &scan.edits[k];
         memcpy(out + o, text + from, e->at - from);
         o += e->at - from;
-        // The paint screen shows a single price, the tokens one when there is
-        // one, so vinyls are sold for credits only; the garage offers both.
-        if (e->vinyl)
-            o += (size_t)sprintf(out + o, "\"price\":[{\"currency\":\"credits\",\"price\":%lu}]",
-                                 e->tokens * (unsigned long)s_rate);
-        else
-            o += (size_t)sprintf(out + o,
-                                 "\"price\":[{\"currency\":\"credits\",\"price\":%lu},"
-                                 "{\"currency\":\"hardcurrency\",\"price\":%lu}]",
-                                 e->tokens * (unsigned long)s_rate, e->tokens);
+        switch (e->kind) {
+            case EDIT_CREDITS:
+                o += (size_t)sprintf(out + o, "%lu", e->credits);
+                break;
+            case EDIT_VINYL:
+                // The paint screen shows a single price, the tokens one when
+                // there is one, so vinyls are sold for credits only.
+                o += (size_t)sprintf(out + o, "\"price\":[{\"currency\":\"credits\",\"price\":%lu}]", e->credits);
+                break;
+            case EDIT_ADD_CREDITS:
+                o += (size_t)sprintf(out + o,
+                                     "\"price\":[{\"currency\":\"credits\",\"price\":%lu},"
+                                     "{\"currency\":\"hardcurrency\",\"price\":%lu}]",
+                                     e->credits, e->tokens);
+                break;
+        }
         from = e->end;
     }
     memcpy(out + o, text + from, length - from);
     o += length - from;
     out[o] = 0;
     free(scan.edits);
-    l_info("[shop] store catalog: %d token-only vehicles also priced in credits, %d vinyl groups sold for credits "
-           "(%d per token)", scan.vehicles, scan.vinyls, s_rate);
+    l_info("[shop] store catalog: %d token-only vehicles priced in credits (%d per token), %d vehicles repriced, "
+           "%d vinyl groups sold for credits", scan.converted, s_rate, scan.repriced, scan.vinyls);
     *out_length = o;
     return out;
 }

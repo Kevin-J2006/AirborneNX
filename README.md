@@ -169,14 +169,20 @@ fps=30
 | `fps` | `30` o `60` | `60` |
 | `shadercache` | `0` (desactivada) o `1` | `1` |
 | `tokencars` | `0` (precios originales) o `1` | `1` |
-| `tokenrate` | créditos por ficha | `150` |
+| `tokenrate` | créditos por ficha | `100` |
+| `economy` | `0` (precios del juego) o `1` | `1` |
 
 `shadercache` guarda los shaders ya compilados en `cache/shaders.bin` para no recompilarlos en cada arranque. Se puede borrar ese archivo sin problema: se vuelve a generar.
 
 `tokencars` añade un precio en créditos a los vehículos que solo se venden por fichas (que sin
 conexión no se pueden conseguir): fichas × `tokenrate`. Los vehículos que se fabrican con planos
-se venden igual que los demás, y los vinilos que costaban fichas pasan a costar créditos. 150 es aproximadamente el cambio que usa el
-propio juego en los artículos que tienen los dos precios. El archivo original no se modifica; la
+se venden igual que los demás, y los vinilos que costaban fichas pasan a costar créditos.
+
+`economy` ajusta los precios a un juego sin compras: los vehículos bajan por tramos (hasta 50 000
+no cambian; hasta 250 000, −30 %; hasta 1 000 000, −45 %; por encima, −60 %), las mejoras cuestan
+el 40 % y el Audi R8 e-tron cuesta 2500 créditos para que sea un primer coche asequible.
+
+El archivo original no se modifica; la
 versión convertida se guarda en `cache/asphaltshop_credits.xtea`.
 
 ---
