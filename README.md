@@ -2,7 +2,7 @@
 
 Port nativo de **Asphalt 8: Airborne (Android, v4.0.0l)** para **Nintendo Switch**, por **ItsDroidy06**.
 
-Versión del port: **1.0.1**
+Versión del port: **1.1.0**
 
 AirborneNX no incluye el juego. Carga las bibliotecas originales `arm64-v8a` del APK y les da en la consola
 el entorno Android que esperan. Necesitas tu propia copia del juego (APK v4.0.0l y sus datos).
@@ -25,13 +25,25 @@ el entorno Android que esperan. Necesitas tu propia copia del juego (APK v4.0.0l
 
 Probado en consola real (Atmosphère) y en el emulador Eden v0.2.1.
 
-Esta es la **primera versión** del port, así que puede tener bugs. Si encuentras uno, repórtalo con los
+El port es joven, así que puede tener bugs. Si encuentras uno, repórtalo con los
 archivos que se indican en [Si algo falla](#si-algo-falla).
 
 Funciona:
 * Menús, garaje y carreras completas.
 * Pantalla táctil y mando (Joy-Con / Pro Controller).
 * Guardado de la partida en la SD.
+
+### Novedades de la 1.1.0
+
+* **Todos los vehículos se pueden comprar con créditos.** Los que solo se vendían por fichas (que sin
+  conexión no se pueden conseguir) y los que se fabricaban con planos ahora tienen precio en créditos,
+  igual que los vinilos que costaban fichas.
+* **Economía ajustada a un juego sin compras:** vehículos y mejoras más baratos, y un primer coche
+  asequible (Audi R8 e-tron, 2500 créditos).
+* **Menús más ágiles:** menos tirones al navegar y pantallas que abren antes.
+* **Arranques más rápidos:** los shaders compilados se guardan en la SD.
+* **Arreglado el sonido que desaparecía** en mitad de una sesión mientras el juego seguía.
+* **Medidor de FPS** en pantalla, pulsando los dos sticks a la vez.
 
 ### Rendimiento
 
@@ -150,6 +162,7 @@ Si el port se cierra solo, abre `switch/AirborneNX/airbornenx.log`: la última l
 | Y | Cambiar vista |
 | Pulsar stick izquierdo | Reaparición |
 | + | Pausa |
+| Pulsar los dos sticks a la vez | Mostrar u ocultar el medidor de FPS |
 | Pantalla táctil | Menús y controles táctiles del juego |
 
 Al arrancar, el juego muestra su propio esquema de mando; pulsa cualquier botón para continuar.
@@ -169,14 +182,13 @@ fps=30
 | `fps` | `30` o `60` | `60` |
 | `shadercache` | `0` (desactivada) o `1` | `1` |
 | `tokencars` | `0` (precios originales) o `1` | `1` |
-| `tokenrate` | créditos por ficha | `100` |
 | `economy` | `0` (precios del juego) o `1` | `1` |
 | `fpsoverlay` | `0` (oculto) o `1` (visible al arrancar) | `0` |
 
 `shadercache` guarda los shaders ya compilados en `cache/shaders.bin` para no recompilarlos en cada arranque. Se puede borrar ese archivo sin problema: se vuelve a generar.
 
 `tokencars` añade un precio en créditos a los vehículos que solo se venden por fichas (que sin
-conexión no se pueden conseguir): fichas × `tokenrate`. Los vehículos que se fabrican con planos
+conexión no se pueden conseguir). Los vehículos que se fabrican con planos
 se venden igual que los demás, y los vinilos que costaban fichas pasan a costar créditos.
 
 `economy` ajusta los precios a un juego sin compras: los vehículos bajan por tramos (hasta 50 000

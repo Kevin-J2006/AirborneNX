@@ -19,7 +19,7 @@ INCLUDES    := include source source/utils source/reimpl lib lib/falso_jni lib/s
 
 APP_TITLE   := AirborneNX
 APP_AUTHOR  := ItsDroidy06
-APP_VERSION := 1.0.1
+APP_VERSION := 1.1.0
 APP_ICON    := $(TOPDIR)/icon.jpg
 
 ARCH        := -march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
